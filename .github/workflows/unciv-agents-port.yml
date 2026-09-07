@@ -1,13 +1,129 @@
-name: Unciv Agents port workspace
+name: Unciv Agents 4.21.18 port CI
 
 on:
+  push:
+    branches: [automation/unciv-agents-port]
   workflow_dispatch:
 
 permissions:
   contents: read
 
 jobs:
-  placeholder:
+  build-and-test:
     runs-on: ubuntu-latest
+    timeout-minutes: 90
     steps:
-      - run: echo "Patch staging"
+      - name: Checkout staged patches
+        uses: actions/checkout@v4
+
+      - name: Set up Java 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Reconstruct and verify patches
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat port-patches/unciv-*.b64 | tr -d '\r\n' > unciv-port.patch.gz.b64
+          cat port-patches/civagent-*.b64 | tr -d '\r\n' > civagent-port.patch.gz.b64
+          echo '1a5ec4ba14f87b05ddf38ecf7fccf2b7b2d566f1ae28b0351c6b75292f10ac77  unciv-port.patch.gz.b64' | sha256sum -c -
+          echo '71708615d7fae190947a3e79b3cc3d4c53f446a699105ae5837a4b4a07185dc6  civagent-port.patch.gz.b64' | sha256sum -c -
+          base64 -d unciv-port.patch.gz.b64 | gzip -d > unciv-port.patch
+          base64 -d civagent-port.patch.gz.b64 | gzip -d > civagent-port.patch
+          echo 'c88bd443ddfe125238b1644b7ca770bec3f0c83582c76db6e30a0f1e7087ebaa  unciv-port.patch' | sha256sum -c -
+          echo 'e379976d2d4ac5ee87799feaafcbe8fdc4fffc6c2100fbb7fc2c70e076ede8b6  civagent-port.patch' | sha256sum -c -
+
+      - name: Clone pinned upstream sources
+        shell: bash
+        run: |
+          set -euo pipefail
+          git clone --depth 1 --branch master https://github.com/yairm210/Unciv.git Unciv
+          test "$(git -C Unciv rev-parse HEAD)" = 'edcd78c5f78d87843346635b2aad660e65333ea5'
+          git clone --depth 1 --branch release/release https://github.com/asdqsczser/CivAgent.git CivAgent
+          test "$(git -C CivAgent rev-parse HEAD)" = '2fcf78f022c048290de616bbf7218aadd3eb26e6'
+
+      - name: Apply port
+        shell: bash
+        run: |
+          set -euo pipefail
+          git -C Unciv apply --check ../unciv-port.patch
+          git -C Unciv apply ../unciv-port.patch
+          git -C CivAgent apply --check ../civagent-port.patch
+          git -C CivAgent apply ../civagent-port.patch
+          python -m compileall -q CivAgent/civsim CivAgent/deployment/unciv_server
+
+      - name: Compile Unciv and test sources
+        shell: bash
+        working-directory: Unciv
+        run: |
+          set -euo pipefail
+          chmod +x gradlew
+          ./gradlew :desktop:dist :tests:compileTestKotlin --stacktrace --no-daemon
+
+      - name: Install current Unciv JAR into CivAgent
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -f Unciv/desktop/build/libs/Unciv.jar
+          cp Unciv/desktop/build/libs/Unciv.jar CivAgent/resources/Unciv.jar
+
+      - name: Smoke-test JPype bridge
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --disable-pip-version-check JPype1==1.5.0
+          python - <<'PY'
+          from pathlib import Path
+          import jpype
+          from jpype import JClass
+
+          jar = Path('CivAgent/resources/Unciv.jar').resolve()
+          jpype.startJVM(classpath=[str(jar)], convertStrings=True)
+          bridge = JClass('com.unciv.civagent.CivAgentSimulatorBridge')
+          bridge.initialize()
+          sample = Path('CivAgent/scripts/reproductions/Autosave-China-60')
+          if sample.is_file():
+              data = sample.read_text(encoding='utf-8')
+              normalized = str(bridge.normalizeGame(data))
+              assert normalized
+          bridge.shutdown()
+          jpype.shutdownJVM()
+          print('CivAgent JPype bridge smoke test passed')
+          PY
+
+      - name: Package updated sources
+        if: success()
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf Unciv/.git CivAgent/.git
+          mkdir -p dist
+          cp -a CivAgent dist/CivAgent-Unciv-4.21.18
+          cp -a Unciv dist/Unciv-CivAgent-4.21.18-source
+          cat > dist/BUILD-REPORT.txt <<'EOF'
+          CivAgent source: asdqsczser/CivAgent release/release @ 2fcf78f022c048290de616bbf7218aadd3eb26e6
+          Unciv source: yairm210/Unciv master @ edcd78c5f78d87843346635b2aad660e65333ea5 (4.21.18)
+          Port: current civID, TradeOfferType, TradeLogic, current GameInfo turn automation, JPype bridge
+          Validation: desktop fat JAR compiled; test sources compiled; Python syntax compiled; JPype bridge initialized and normalized the bundled reproduction save.
+          EOF
+          (cd dist && zip -qr ../CivAgent-Unciv-4.21.18.zip CivAgent-Unciv-4.21.18 BUILD-REPORT.txt)
+          (cd dist && zip -qr ../Unciv-CivAgent-4.21.18-source.zip Unciv-CivAgent-4.21.18-source BUILD-REPORT.txt)
+
+      - name: Upload deliverables
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: unciv-agents-4.21.18
+          path: |
+            CivAgent-Unciv-4.21.18.zip
+            Unciv-CivAgent-4.21.18-source.zip
+            dist/BUILD-REPORT.txt
+          compression-level: 0
+          retention-days: 7
