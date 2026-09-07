@@ -26,6 +26,8 @@ jobs:
           set -euo pipefail
           git clone --branch release/release https://github.com/asdqsczser/Unciv.git Unciv
           cd Unciv
+          git config user.name "Unciv Agents Port"
+          git config user.email "unciv-agents-port@users.noreply.github.com"
           git remote add upstream https://github.com/yairm210/Unciv.git
           git fetch upstream edcd78c5f78d87843346635b2aad660e65333ea5
 
