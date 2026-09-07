@@ -1,0 +1,25 @@
+name: Unciv Agents port workspace
+on:
+  push:
+    branches: [automation/unciv-agents-port]
+permissions:
+  contents: read
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Build source bundle
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir bundle
+          git clone --depth 1 --branch release/release https://github.com/asdqsczser/CivAgent.git bundle/CivAgent
+          rm -rf bundle/CivAgent/.git
+          printf '%s\n' 'CivAgent source: asdqsczser/CivAgent release/release @ 2fcf78f022c048290de616bbf7218aadd3eb26e6' > bundle/SOURCE.txt
+      - name: Upload bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: civagent-source
+          path: bundle
+          retention-days: 1
