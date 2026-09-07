@@ -39,9 +39,9 @@ jobs:
 
           echo '1a5ec4ba14f87b05ddf38ecf7fccf2b7b2d566f1ae28b0351c6b75292f10ac77  unciv-port.patch.gz.b64' | sha256sum -c -
           echo '7c9b1762dd394b69225b2789d93599166d48ec18f229e04845172a3524b2e96e  unciv-runtime-fix.patch.gz.b64' | sha256sum -c -
-          echo '7a150e366576e6660cf45353b7a0bd459f07eed32f26370022caaa683a9430de  unciv-postfix.patch.gz.b64' | sha256sum -c -
+          echo 'e42b98c2c3442d1afbbd2f6c5f4eed821ca9370a7ffa3999d32b4c10d07aeff9  unciv-postfix.patch.gz.b64' | sha256sum -c -
           echo '71708615d7fae190947a3e79b3cc3d4c53f446a699105ae5837a4b4a07185dc6  civagent-port.patch.gz.b64' | sha256sum -c -
-          echo '1249da7c8ca57f26f4bfa55f532f6f767f6306bfa268d0663e33580f1c654609  civagent-postfix.patch.gz.b64' | sha256sum -c -
+          echo '61d48fadc8b0da66e678428cc4fdf5ea76403462d5437d12c377e64596f53de9  civagent-postfix.patch.gz.b64' | sha256sum -c -
 
           base64 -d unciv-port.patch.gz.b64 | gzip -d > unciv-port.patch
           base64 -d unciv-runtime-fix.patch.gz.b64 | gzip -d > unciv-runtime-fix.patch
