@@ -33,16 +33,27 @@ jobs:
           set -euo pipefail
           cat port-patches/unciv-[0-9][0-9].b64 | tr -d '\r\n' > unciv-port.patch.gz.b64
           cat port-patches/unciv-runtime-fix-*.b64 | tr -d '\r\n' > unciv-runtime-fix.patch.gz.b64
-          cat port-patches/civagent-*.b64 | tr -d '\r\n' > civagent-port.patch.gz.b64
+          cat port-patches/unciv-postfix-*.b64 | tr -d '\r\n' > unciv-postfix.patch.gz.b64
+          cat port-patches/civagent-[0-9][0-9].b64 | tr -d '\r\n' > civagent-port.patch.gz.b64
+          cat port-patches/civagent-postfix-*.b64 | tr -d '\r\n' > civagent-postfix.patch.gz.b64
+
           echo '1a5ec4ba14f87b05ddf38ecf7fccf2b7b2d566f1ae28b0351c6b75292f10ac77  unciv-port.patch.gz.b64' | sha256sum -c -
           echo '7c9b1762dd394b69225b2789d93599166d48ec18f229e04845172a3524b2e96e  unciv-runtime-fix.patch.gz.b64' | sha256sum -c -
+          echo '7a150e366576e6660cf45353b7a0bd459f07eed32f26370022caaa683a9430de  unciv-postfix.patch.gz.b64' | sha256sum -c -
           echo '71708615d7fae190947a3e79b3cc3d4c53f446a699105ae5837a4b4a07185dc6  civagent-port.patch.gz.b64' | sha256sum -c -
+          echo '1249da7c8ca57f26f4bfa55f532f6f767f6306bfa268d0663e33580f1c654609  civagent-postfix.patch.gz.b64' | sha256sum -c -
+
           base64 -d unciv-port.patch.gz.b64 | gzip -d > unciv-port.patch
           base64 -d unciv-runtime-fix.patch.gz.b64 | gzip -d > unciv-runtime-fix.patch
+          base64 -d unciv-postfix.patch.gz.b64 | gzip -d > unciv-postfix.patch
           base64 -d civagent-port.patch.gz.b64 | gzip -d > civagent-port.patch
+          base64 -d civagent-postfix.patch.gz.b64 | gzip -d > civagent-postfix.patch
+
           echo 'c88bd443ddfe125238b1644b7ca770bec3f0c83582c76db6e30a0f1e7087ebaa  unciv-port.patch' | sha256sum -c -
           echo 'cdcbef79a34ec04eaa1a9e6507f514fc8c724a0257a76b816ab599b34c1029da  unciv-runtime-fix.patch' | sha256sum -c -
+          echo 'e4438711bce12dbfc7124ea034aedd674118672c202ca092ef039498715bbda4  unciv-postfix.patch' | sha256sum -c -
           echo 'e379976d2d4ac5ee87799feaafcbe8fdc4fffc6c2100fbb7fc2c70e076ede8b6  civagent-port.patch' | sha256sum -c -
+          echo '642438342f04961db8ba51dde5851c56b0bbd93459da20c37c1c915b570151b5  civagent-postfix.patch' | sha256sum -c -
 
       - name: Clone pinned upstream sources
         shell: bash
@@ -61,8 +72,12 @@ jobs:
           git -C Unciv apply ../unciv-port.patch
           git -C Unciv apply --check ../unciv-runtime-fix.patch
           git -C Unciv apply ../unciv-runtime-fix.patch
+          git -C Unciv apply --check ../unciv-postfix.patch
+          git -C Unciv apply ../unciv-postfix.patch
           git -C CivAgent apply --check ../civagent-port.patch
           git -C CivAgent apply ../civagent-port.patch
+          git -C CivAgent apply --check ../civagent-postfix.patch
+          git -C CivAgent apply ../civagent-postfix.patch
           python -m compileall -q CivAgent/civsim CivAgent/deployment/unciv_server
 
       - name: Compile Unciv and test sources
@@ -80,13 +95,15 @@ jobs:
           test -f Unciv/desktop/build/libs/Unciv.jar
           cp Unciv/desktop/build/libs/Unciv.jar CivAgent/resources/Unciv.jar
 
-      - name: Smoke-test JPype bridge and legacy save migration
+      - name: Smoke-test bridge contracts and legacy save migration
         shell: bash
         run: |
           set -euo pipefail
           python -m pip install --disable-pip-version-check JPype1==1.5.0
           python - <<'PY'
+          import json
           from pathlib import Path
+
           import jpype
           from jpype import JClass
 
@@ -96,13 +113,50 @@ jobs:
               jpype.startJVM(classpath=[str(jar)], convertStrings=True)
               bridge = JClass('com.unciv.civagent.CivAgentSimulatorBridge')
               bridge.initialize()
+
               sample = Path('CivAgent/scripts/reproductions/Autosave-China-60')
               assert sample.is_file()
               data = sample.read_text(encoding='utf-8')
               normalized = str(bridge.normalizeGame(data))
               assert normalized
               assert 'com.unciv.json.HashMapVector2' not in normalized
-              print('CivAgent JPype bridge and legacy save migration passed')
+
+              decision = json.loads(str(
+                  bridge.wantsToSignDeclarationOfFriendship(normalized, 'China', 'Aztecs')
+              ))
+              assert isinstance(decision['result'], bool)
+              assert isinstance(decision['reason']['consent'], list)
+              assert isinstance(decision['reason']['reject'], list)
+
+              production = json.loads(str(
+                  bridge.getProductionToBuildAvailable(normalized, 'China')
+              ))
+              assert isinstance(production, list) and production
+              assert all(isinstance(item['available_productions'], list) for item in production)
+
+              # Simulation temporarily automates non-anchor human slots, but it must not
+              # persist those temporary player-type changes in the returned save.
+              multi_human = json.loads(normalized)
+              current = str(multi_human.get('currentPlayer', '')).lower()
+              candidate = next(
+                  civ for civ in multi_human['civilizations']
+                  if civ.get('playerType') != 'Human'
+                  and str(civ.get('civID', civ.get('civName', ''))).lower() != current
+                  and str(civ.get('civName', '')).lower() not in {'barbarians', 'spectator'}
+              )
+              candidate['playerType'] = 'Human'
+              expected_humans = sum(
+                  civ.get('playerType') == 'Human' for civ in multi_human['civilizations']
+              )
+              simulated = json.loads(str(
+                  bridge.simulate(json.dumps(multi_human), 1, False, False, False)
+              ))
+              actual_humans = sum(
+                  civ.get('playerType') == 'Human' for civ in simulated['civilizations']
+              )
+              assert actual_humans == expected_humans, (expected_humans, actual_humans)
+
+              print('CivAgent bridge contracts, legacy migration, and player-type preservation passed')
           finally:
               if bridge is not None:
                   bridge.shutdown()
@@ -124,7 +178,7 @@ jobs:
           Unciv source: yairm210/Unciv master @ edcd78c5f78d87843346635b2aad660e65333ea5 (4.21.18)
           Port: current civID, TradeOfferType, TradeLogic, current GameInfo turn automation, JPype bridge
           Compatibility: migrates the old CivAgent HashMapVector2 save representation before current Unciv deserialization
-          Validation: desktop fat JAR compiled; test sources compiled; Python syntax compiled; JPype bridge initialized and normalized the bundled 4.8.17 reproduction save without retaining the removed HashMapVector2 type.
+          Validation: desktop fat JAR compiled; test sources compiled; Python syntax compiled; bundled 4.8.17 reproduction save migrated; decision-reason and production-option JSON contracts verified; one-turn simulation preserved all human player slots.
           EOF
           (cd dist && zip -qr ../CivAgent-Unciv-4.21.18.zip CivAgent-Unciv-4.21.18 BUILD-REPORT.txt)
           (cd dist && zip -qr ../Unciv-CivAgent-4.21.18-source.zip Unciv-CivAgent-4.21.18-source BUILD-REPORT.txt)
