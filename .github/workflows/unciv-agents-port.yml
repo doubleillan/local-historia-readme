@@ -31,13 +31,17 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          cat port-patches/unciv-*.b64 | tr -d '\r\n' > unciv-port.patch.gz.b64
+          cat port-patches/unciv-[0-9][0-9].b64 | tr -d '\r\n' > unciv-port.patch.gz.b64
+          cat port-patches/unciv-runtime-fix-*.b64 | tr -d '\r\n' > unciv-runtime-fix.patch.gz.b64
           cat port-patches/civagent-*.b64 | tr -d '\r\n' > civagent-port.patch.gz.b64
           echo '1a5ec4ba14f87b05ddf38ecf7fccf2b7b2d566f1ae28b0351c6b75292f10ac77  unciv-port.patch.gz.b64' | sha256sum -c -
+          echo '7c9b1762dd394b69225b2789d93599166d48ec18f229e04845172a3524b2e96e  unciv-runtime-fix.patch.gz.b64' | sha256sum -c -
           echo '71708615d7fae190947a3e79b3cc3d4c53f446a699105ae5837a4b4a07185dc6  civagent-port.patch.gz.b64' | sha256sum -c -
           base64 -d unciv-port.patch.gz.b64 | gzip -d > unciv-port.patch
+          base64 -d unciv-runtime-fix.patch.gz.b64 | gzip -d > unciv-runtime-fix.patch
           base64 -d civagent-port.patch.gz.b64 | gzip -d > civagent-port.patch
           echo 'c88bd443ddfe125238b1644b7ca770bec3f0c83582c76db6e30a0f1e7087ebaa  unciv-port.patch' | sha256sum -c -
+          echo 'cdcbef79a34ec04eaa1a9e6507f514fc8c724a0257a76b816ab599b34c1029da  unciv-runtime-fix.patch' | sha256sum -c -
           echo 'e379976d2d4ac5ee87799feaafcbe8fdc4fffc6c2100fbb7fc2c70e076ede8b6  civagent-port.patch' | sha256sum -c -
 
       - name: Clone pinned upstream sources
@@ -55,6 +59,8 @@ jobs:
           set -euo pipefail
           git -C Unciv apply --check ../unciv-port.patch
           git -C Unciv apply ../unciv-port.patch
+          git -C Unciv apply --check ../unciv-runtime-fix.patch
+          git -C Unciv apply ../unciv-runtime-fix.patch
           git -C CivAgent apply --check ../civagent-port.patch
           git -C CivAgent apply ../civagent-port.patch
           python -m compileall -q CivAgent/civsim CivAgent/deployment/unciv_server
@@ -74,7 +80,7 @@ jobs:
           test -f Unciv/desktop/build/libs/Unciv.jar
           cp Unciv/desktop/build/libs/Unciv.jar CivAgent/resources/Unciv.jar
 
-      - name: Smoke-test JPype bridge
+      - name: Smoke-test JPype bridge and legacy save migration
         shell: bash
         run: |
           set -euo pipefail
@@ -84,18 +90,24 @@ jobs:
           import jpype
           from jpype import JClass
 
-          jar = Path('CivAgent/resources/Unciv.jar').resolve()
-          jpype.startJVM(classpath=[str(jar)], convertStrings=True)
-          bridge = JClass('com.unciv.civagent.CivAgentSimulatorBridge')
-          bridge.initialize()
-          sample = Path('CivAgent/scripts/reproductions/Autosave-China-60')
-          if sample.is_file():
+          bridge = None
+          try:
+              jar = Path('CivAgent/resources/Unciv.jar').resolve()
+              jpype.startJVM(classpath=[str(jar)], convertStrings=True)
+              bridge = JClass('com.unciv.civagent.CivAgentSimulatorBridge')
+              bridge.initialize()
+              sample = Path('CivAgent/scripts/reproductions/Autosave-China-60')
+              assert sample.is_file()
               data = sample.read_text(encoding='utf-8')
               normalized = str(bridge.normalizeGame(data))
               assert normalized
-          bridge.shutdown()
-          jpype.shutdownJVM()
-          print('CivAgent JPype bridge smoke test passed')
+              assert 'com.unciv.json.HashMapVector2' not in normalized
+              print('CivAgent JPype bridge and legacy save migration passed')
+          finally:
+              if bridge is not None:
+                  bridge.shutdown()
+              if jpype.isJVMStarted():
+                  jpype.shutdownJVM()
           PY
 
       - name: Package updated sources
@@ -111,7 +123,8 @@ jobs:
           CivAgent source: asdqsczser/CivAgent release/release @ 2fcf78f022c048290de616bbf7218aadd3eb26e6
           Unciv source: yairm210/Unciv master @ edcd78c5f78d87843346635b2aad660e65333ea5 (4.21.18)
           Port: current civID, TradeOfferType, TradeLogic, current GameInfo turn automation, JPype bridge
-          Validation: desktop fat JAR compiled; test sources compiled; Python syntax compiled; JPype bridge initialized and normalized the bundled reproduction save.
+          Compatibility: migrates the old CivAgent HashMapVector2 save representation before current Unciv deserialization
+          Validation: desktop fat JAR compiled; test sources compiled; Python syntax compiled; JPype bridge initialized and normalized the bundled 4.8.17 reproduction save without retaining the removed HashMapVector2 type.
           EOF
           (cd dist && zip -qr ../CivAgent-Unciv-4.21.18.zip CivAgent-Unciv-4.21.18 BUILD-REPORT.txt)
           (cd dist && zip -qr ../Unciv-CivAgent-4.21.18-source.zip Unciv-CivAgent-4.21.18-source BUILD-REPORT.txt)
