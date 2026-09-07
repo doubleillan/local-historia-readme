@@ -1,0 +1,288 @@
+name: Unciv Agents 4.21.18 final build
+
+on:
+  push:
+    branches: [automation/unciv-agents-port]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - name: Checkout staged patches
+        uses: actions/checkout@v4
+
+      - name: Set up Java 21
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+
+      - name: Reconstruct and verify patches
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat port-patches/unciv-[0-9][0-9].b64 | tr -d '\r\n' > unciv-port.patch.gz.b64
+          cat port-patches/unciv-runtime-fix-*.b64 | tr -d '\r\n' > unciv-runtime-fix.patch.gz.b64
+          cat port-patches/unciv-postfix-*.b64 | tr -d '\r\n' > unciv-postfix.patch.gz.b64
+          cat port-patches/unciv-command-fix-*.b64 | tr -d '\r\n' > unciv-command-fix.patch.gz.b64
+          cat port-patches/civagent-[0-9][0-9].b64 | tr -d '\r\n' > civagent-port.patch.gz.b64
+          cat port-patches/civagent-postfix-*.b64 | tr -d '\r\n' > civagent-postfix.patch.gz.b64
+          cat port-patches/civagent-command-fix-*.b64 | tr -d '\r\n' > civagent-command-fix.patch.gz.b64
+
+          echo '1a5ec4ba14f87b05ddf38ecf7fccf2b7b2d566f1ae28b0351c6b75292f10ac77  unciv-port.patch.gz.b64' | sha256sum -c -
+          echo '7c9b1762dd394b69225b2789d93599166d48ec18f229e04845172a3524b2e96e  unciv-runtime-fix.patch.gz.b64' | sha256sum -c -
+          echo 'e42b98c2c3442d1afbbd2f6c5f4eed821ca9370a7ffa3999d32b4c10d07aeff9  unciv-postfix.patch.gz.b64' | sha256sum -c -
+          echo '3001f8db12ab80772a93d244f4d3e2467b806b62ee0650827bb2b7577b7d6dff  unciv-command-fix.patch.gz.b64' | sha256sum -c -
+          echo '71708615d7fae190947a3e79b3cc3d4c53f446a699105ae5837a4b4a07185dc6  civagent-port.patch.gz.b64' | sha256sum -c -
+          echo '61d48fadc8b0da66e678428cc4fdf5ea76403462d5437d12c377e64596f53de9  civagent-postfix.patch.gz.b64' | sha256sum -c -
+          echo '0c644e8d632a89a6e14e1e4aafa9f2b46a9119668795d2ee7515e2901abbd0b0  civagent-command-fix.patch.gz.b64' | sha256sum -c -
+
+          for name in unciv-port unciv-runtime-fix unciv-postfix unciv-command-fix civagent-port civagent-postfix civagent-command-fix; do
+            base64 -d "$name.patch.gz.b64" | gzip -d > "$name.patch"
+          done
+
+          echo 'c88bd443ddfe125238b1644b7ca770bec3f0c83582c76db6e30a0f1e7087ebaa  unciv-port.patch' | sha256sum -c -
+          echo 'cdcbef79a34ec04eaa1a9e6507f514fc8c724a0257a76b816ab599b34c1029da  unciv-runtime-fix.patch' | sha256sum -c -
+          echo 'e4438711bce12dbfc7124ea034aedd674118672c202ca092ef039498715bbda4  unciv-postfix.patch' | sha256sum -c -
+          echo '7d0fa7555b45f3820c0e302e0af59bcbc77d70c5a10aba9a2059c1a00ec566fe  unciv-command-fix.patch' | sha256sum -c -
+          echo 'e379976d2d4ac5ee87799feaafcbe8fdc4fffc6c2100fbb7fc2c70e076ede8b6  civagent-port.patch' | sha256sum -c -
+          echo '642438342f04961db8ba51dde5851c56b0bbd93459da20c37c1c915b570151b5  civagent-postfix.patch' | sha256sum -c -
+          echo '3c9fd7dea99455314913a3c55a17910f499d66bf660dadd945179d28801a917e  civagent-command-fix.patch' | sha256sum -c -
+
+      - name: Clone pinned sources
+        shell: bash
+        run: |
+          set -euo pipefail
+          git clone --depth 1 --branch master https://github.com/yairm210/Unciv.git Unciv
+          test "$(git -C Unciv rev-parse HEAD)" = 'edcd78c5f78d87843346635b2aad660e65333ea5'
+          git clone --depth 1 --branch release/release https://github.com/asdqsczser/CivAgent.git CivAgent
+          test "$(git -C CivAgent rev-parse HEAD)" = '2fcf78f022c048290de616bbf7218aadd3eb26e6'
+
+      - name: Apply complete port
+        shell: bash
+        run: |
+          set -euo pipefail
+          for patch in unciv-port unciv-runtime-fix unciv-postfix unciv-command-fix; do
+            git -C Unciv apply --check "../$patch.patch"
+            git -C Unciv apply "../$patch.patch"
+          done
+          for patch in civagent-port civagent-postfix civagent-command-fix; do
+            git -C CivAgent apply --check "../$patch.patch"
+            git -C CivAgent apply "../$patch.patch"
+          done
+          python -m compileall -q CivAgent/civsim CivAgent/civagent CivAgent/deployment/unciv_server
+          grep -q 'def apply_game_command' CivAgent/civsim/simulator/simulator.py
+          grep -q '_apply_current_game_command' CivAgent/civsim/utils.py
+
+      - name: Compile Unciv and test sources
+        shell: bash
+        working-directory: Unciv
+        run: |
+          set -euo pipefail
+          chmod +x gradlew
+          ./gradlew :desktop:dist :tests:compileTestKotlin --stacktrace --no-daemon
+
+      - name: Install current Unciv JAR into CivAgent
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -f Unciv/desktop/build/libs/Unciv.jar
+          cp Unciv/desktop/build/libs/Unciv.jar CivAgent/resources/Unciv.jar
+
+      - name: Smoke-test bridge, migration, simulation and GM commands
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --disable-pip-version-check JPype1==1.5.0
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          import jpype
+          from jpype import JClass
+
+          def civ(data, name):
+              target = name.lower()
+              return next(
+                  item for item in data['civilizations']
+                  if str(item.get('civID', '')).lower() == target
+                  or str(item.get('civName', '')).lower() == target
+              )
+
+          def diplomacy(data, first, second):
+              first_civ = civ(data, first)
+              second_civ = civ(data, second)
+              entries = first_civ.get('diplomacy', {})
+              for key in (second_civ.get('civID'), second_civ.get('civName')):
+                  if key in entries:
+                      return entries[key]
+              raise AssertionError(f'Diplomacy entry not found: {first} -> {second}')
+
+          def has_trade(entry, name):
+              for trade in entry.get('trades', []):
+                  for side in ('ourOffers', 'theirOffers'):
+                      if any(offer.get('name') == name for offer in trade.get(side, [])):
+                          return True
+              return False
+
+          bridge = None
+          try:
+              jar = Path('CivAgent/resources/Unciv.jar').resolve()
+              jpype.startJVM(classpath=[str(jar)], convertStrings=True)
+              bridge = JClass('com.unciv.civagent.CivAgentSimulatorBridge')
+              bridge.initialize()
+
+              sample = Path('CivAgent/scripts/reproductions/Autosave-China-60')
+              assert sample.is_file()
+              normalized = str(bridge.normalizeGame(sample.read_text(encoding='utf-8')))
+              assert normalized and 'com.unciv.json.HashMapVector2' not in normalized
+              base = json.loads(normalized)
+
+              decision = json.loads(str(
+                  bridge.wantsToSignDeclarationOfFriendship(normalized, 'China', 'Aztecs')
+              ))
+              assert isinstance(decision['result'], bool)
+              assert isinstance(decision['reason']['consent'], list)
+              assert isinstance(decision['reason']['reject'], list)
+
+              production = json.loads(str(
+                  bridge.getProductionToBuildAvailable(normalized, 'China')
+              ))
+              assert isinstance(production, list) and production
+              assert all(isinstance(item['available_productions'], list) for item in production)
+
+              # Current save mechanics: economy, research and production.
+              gold_before = civ(base, 'China').get('gold', 0)
+              gold_after = json.loads(str(bridge.addGold(normalized, 'China', 321)))
+              assert civ(gold_after, 'China').get('gold', 0) == gold_before + 321
+
+              china_before = civ(base, 'China')
+              tech_name = china_before['tech']['techsToResearch'][0]
+              tech_before = china_before['tech'].get('techsInProgress', {}).get(tech_name, 0)
+              researched = json.loads(str(bridge.completeResearch(normalized, 'China')))
+              tech_after = civ(researched, 'China')['tech'].get('techsInProgress', {}).get(tech_name, 0)
+              assert tech_after > tech_before
+
+              city_before = next(city for city in china_before['cities'] if city.get('cityConstructions', {}).get('constructionQueue'))
+              construction_name = city_before['cityConstructions']['constructionQueue'][0]
+              construction_before = city_before['cityConstructions'].get('inProgressConstructions', {}).get(construction_name, 0)
+              completed = json.loads(str(bridge.completeConstructions(normalized, 'China')))
+              city_after = next(city for city in civ(completed, 'China')['cities'] if city['name'] == city_before['name'])
+              construction_after = city_after['cityConstructions'].get('inProgressConstructions', {}).get(construction_name, 0)
+              assert construction_after > construction_before
+
+              # Current diplomacy and trade mechanics.
+              warred_text = str(bridge.declareWar(normalized, 'China', 'Aztecs'))
+              warred = json.loads(warred_text)
+              assert diplomacy(warred, 'China', 'Aztecs').get('diplomaticStatus', 'War') == 'War'
+              peaced_text = str(bridge.makePeace(warred_text, 'China', 'Aztecs'))
+              peaced = json.loads(peaced_text)
+              assert diplomacy(peaced, 'China', 'Aztecs').get('diplomaticStatus') == 'Peace'
+
+              friendship = json.loads(str(bridge.signFriendship(normalized, 'China', 'Aztecs')))
+              assert 'DeclarationOfFriendship' in diplomacy(friendship, 'China', 'Aztecs').get('flagsCountdown', {})
+
+              borders = json.loads(str(bridge.openBorders(normalized, 'China', 'Aztecs', 50)))
+              assert has_trade(diplomacy(borders, 'China', 'Aztecs'), 'Open Borders')
+
+              research = json.loads(str(bridge.signResearchAgreement(normalized, 'China', 'Aztecs')))
+              assert 'ResearchAgreement' in diplomacy(research, 'China', 'Aztecs').get('flagsCountdown', {})
+
+              defense = json.loads(str(bridge.signDefensivePact(normalized, 'China', 'Aztecs', 20)))
+              assert 'DefensivePact' in diplomacy(defense, 'China', 'Aztecs').get('flagsCountdown', {})
+
+              alliance = json.loads(str(bridge.formAlliance(normalized, 'China', 'Rome')))
+              alliance_entry = diplomacy(alliance, 'China', 'Rome')
+              assert has_trade(alliance_entry, 'Open Borders')
+              assert 'ResearchAgreement' in alliance_entry.get('flagsCountdown', {})
+              assert 'DefensivePact' in alliance_entry.get('flagsCountdown', {})
+
+              # Current city-transfer mechanics.
+              rome_before = civ(base, 'Rome')
+              city_to_annex = next((city for city in rome_before['cities'] if not city.get('isOriginalCapital')), rome_before['cities'][-1])
+              annexed = json.loads(str(bridge.annexCity(normalized, 'China', 'Rome', city_to_annex['name'])))
+              assert len(civ(annexed, 'China')['cities']) == len(china_before['cities']) + 1
+              assert len(civ(annexed, 'Rome')['cities']) == len(rome_before['cities']) - 1
+              assert any(city['name'] == city_to_annex['name'] for city in civ(annexed, 'China')['cities'])
+
+              # Complete rounds while preserving every human slot.
+              multi_human = json.loads(normalized)
+              current = str(multi_human.get('currentPlayer', '')).lower()
+              candidate = next(
+                  item for item in multi_human['civilizations']
+                  if item.get('playerType') != 'Human'
+                  and str(item.get('civID', item.get('civName', ''))).lower() != current
+                  and str(item.get('civName', '')).lower() not in {'barbarians', 'spectator'}
+              )
+              candidate['playerType'] = 'Human'
+              expected_humans = sum(item.get('playerType') == 'Human' for item in multi_human['civilizations'])
+              simulated = json.loads(str(bridge.simulate(json.dumps(multi_human), 1, False, False, False)))
+              actual_humans = sum(item.get('playerType') == 'Human' for item in simulated['civilizations'])
+              assert actual_humans == expected_humans, (expected_humans, actual_humans)
+
+              print('All bridge, migration, simulation and GM command smoke tests passed')
+          finally:
+              if bridge is not None:
+                  bridge.shutdown()
+              if jpype.isJVMStarted():
+                  jpype.shutdownJVM()
+          PY
+
+      - name: Package updated sources
+        if: success()
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf Unciv/.git CivAgent/.git
+          mkdir -p dist
+          cp -a CivAgent dist/Unciv-Agents-4.21.18
+          cp -a Unciv dist/Unciv-Agents-4.21.18-Unciv-source
+          cat > dist/BUILD-REPORT.txt <<'EOF'
+          Unciv Agents 4.21.18 port
+
+          CivAgent source: asdqsczser/CivAgent release/release @ 2fcf78f022c048290de616bbf7218aadd3eb26e6
+          Unciv source: yairm210/Unciv master @ edcd78c5f78d87843346635b2aad660e65333ea5 (4.21.18)
+
+          Implemented:
+          - Current civID-based civilization resolution
+          - Current TradeOfferType and TradeLogic contracts
+          - Current GameInfo turn automation
+          - Stable JPype CivAgentSimulatorBridge
+          - Migration of legacy CivAgent HashMapVector2 saves
+          - Decision, production, simulation and multi-human compatibility
+          - GM economy, research, construction, war, peace, friendship, borders, research agreement, defensive pact, alliance and city-transfer commands through current Unciv mechanics
+          - README and changelog references updated to the current official Unciv source
+
+          Validation:
+          - Unciv desktop fat JAR compiled
+          - Unciv test sources compiled
+          - CivAgent Python sources compiled
+          - Bundled 4.8.17 reproduction save migrated
+          - Decision-reason and production-option JSON contracts verified
+          - One-turn simulation preserved all human player slots
+          - All state-changing GM command bridge methods executed and their resulting state was checked
+          EOF
+          (cd dist && zip -qr ../Unciv-Agents-4.21.18.zip Unciv-Agents-4.21.18 BUILD-REPORT.txt)
+          (cd dist && zip -qr ../Unciv-Agents-4.21.18-source.zip Unciv-Agents-4.21.18-Unciv-source BUILD-REPORT.txt)
+
+      - name: Upload deliverables
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: unciv-agents-4.21.18-final
+          path: |
+            Unciv-Agents-4.21.18.zip
+            Unciv-Agents-4.21.18-source.zip
+            dist/BUILD-REPORT.txt
+          compression-level: 0
+          retention-days: 7
