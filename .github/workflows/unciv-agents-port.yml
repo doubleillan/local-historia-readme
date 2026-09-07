@@ -1,54 +1,13 @@
 name: Unciv Agents port workspace
 
 on:
-  push:
-    branches: [automation/unciv-agents-port]
   workflow_dispatch:
 
 permissions:
   contents: read
 
 jobs:
-  source-workspace:
+  placeholder:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
     steps:
-      - name: Clone sources
-        shell: bash
-        run: |
-          set -euo pipefail
-          git clone --depth 1 --branch release/release https://github.com/asdqsczser/CivAgent.git workspace/CivAgent
-          rm -rf workspace/CivAgent/.git
-
-          git clone https://github.com/asdqsczser/Unciv.git custom-git
-          cd custom-git
-          git checkout 499b8cbdc36c29ef99686876bf47225670b28390
-          git diff --binary 870c146e349887b3cebd472a0cb4b366a3f3e1c2..499b8cbdc36c29ef99686876bf47225670b28390 -- \
-            '*.kt' '*.kts' '*.java' '*.gradle' '*.properties' '*.json' '*.yml' '*.yaml' '*.xml' \
-            > ../workspace/custom-text.patch
-          git diff --name-status 870c146e349887b3cebd472a0cb4b366a3f3e1c2..499b8cbdc36c29ef99686876bf47225670b28390 \
-            > ../workspace/custom-files.txt
-          rm -rf .git
-          cd ..
-          mv custom-git workspace/Unciv-custom
-
-          git clone https://github.com/yairm210/Unciv.git upstream-git
-          cd upstream-git
-          git checkout edcd78c5f78d87843346635b2aad660e65333ea5
-          rm -rf .git
-          cd ..
-          mv upstream-git workspace/Unciv-upstream
-
-          cat > workspace/SOURCE-VERSIONS.txt <<'EOF'
-          CivAgent: asdqsczser/CivAgent release/release @ 2fcf78f022c048290de616bbf7218aadd3eb26e6
-          Custom Unciv: asdqsczser/Unciv @ 499b8cbdc36c29ef99686876bf47225670b28390
-          Official Unciv: yairm210/Unciv @ edcd78c5f78d87843346635b2aad660e65333ea5 (4.21.18)
-          EOF
-
-      - name: Upload source workspace
-        uses: actions/upload-artifact@v4
-        with:
-          name: unciv-agents-source-workspace
-          path: workspace
-          compression-level: 6
-          retention-days: 2
+      - run: echo "Patch staging"
