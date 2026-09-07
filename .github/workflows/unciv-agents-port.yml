@@ -9,74 +9,46 @@ permissions:
   contents: read
 
 jobs:
-  merge-workspace:
+  source-workspace:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
-      - name: Clone CivAgent
+      - name: Clone sources
         shell: bash
         run: |
           set -euo pipefail
-          git clone --depth 1 --branch release/release https://github.com/asdqsczser/CivAgent.git CivAgent
-          rm -rf CivAgent/.git
+          git clone --depth 1 --branch release/release https://github.com/asdqsczser/CivAgent.git workspace/CivAgent
+          rm -rf workspace/CivAgent/.git
 
-      - name: Merge official Unciv into CivAgent fork
-        shell: bash
-        run: |
-          set -euo pipefail
-          git clone --branch release/release https://github.com/asdqsczser/Unciv.git Unciv
-          cd Unciv
-          git config user.name "Unciv Agents Port"
-          git config user.email "unciv-agents-port@users.noreply.github.com"
-          git remote add upstream https://github.com/yairm210/Unciv.git
-          git fetch upstream edcd78c5f78d87843346635b2aad660e65333ea5
-
-          CUSTOM_TIP=$(git rev-parse HEAD)
-          MERGE_BASE=$(git merge-base HEAD FETCH_HEAD)
-          printf '%s\n' "$CUSTOM_TIP" > ../custom-tip.txt
-          printf '%s\n' "$MERGE_BASE" > ../merge-base.txt
-          printf '%s\n' 'edcd78c5f78d87843346635b2aad660e65333ea5' > ../upstream-tip.txt
-
-          git diff --name-status "$MERGE_BASE..$CUSTOM_TIP" > ../custom-changed-files.txt
-          git diff --stat "$MERGE_BASE..$CUSTOM_TIP" > ../custom-diff-stat.txt
-          git log --oneline "$MERGE_BASE..$CUSTOM_TIP" > ../custom-commits.txt
-
-          set +e
-          git -c merge.conflictstyle=diff3 merge --no-commit --no-ff FETCH_HEAD
-          MERGE_STATUS=$?
-          set -e
-          printf '%s\n' "$MERGE_STATUS" > ../merge-status.txt
-          git diff --name-only --diff-filter=U > ../merge-conflicts.txt
-          git status --short > ../merge-git-status.txt
-
-          mkdir -p ../conflict-stages/base ../conflict-stages/custom ../conflict-stages/upstream
-          while IFS= read -r path; do
-            [ -z "$path" ] && continue
-            mkdir -p "../conflict-stages/base/$(dirname "$path")" \
-                     "../conflict-stages/custom/$(dirname "$path")" \
-                     "../conflict-stages/upstream/$(dirname "$path")"
-            git show ":1:$path" > "../conflict-stages/base/$path" 2>/dev/null || true
-            git show ":2:$path" > "../conflict-stages/custom/$path" 2>/dev/null || true
-            git show ":3:$path" > "../conflict-stages/upstream/$path" 2>/dev/null || true
-          done < ../merge-conflicts.txt
-
+          git clone https://github.com/asdqsczser/Unciv.git custom-git
+          cd custom-git
+          git checkout 499b8cbdc36c29ef99686876bf47225670b28390
+          git diff --binary 870c146e349887b3cebd472a0cb4b366a3f3e1c2..499b8cbdc36c29ef99686876bf47225670b28390 -- \
+            '*.kt' '*.kts' '*.java' '*.gradle' '*.properties' '*.json' '*.yml' '*.yaml' '*.xml' \
+            > ../workspace/custom-text.patch
+          git diff --name-status 870c146e349887b3cebd472a0cb4b366a3f3e1c2..499b8cbdc36c29ef99686876bf47225670b28390 \
+            > ../workspace/custom-files.txt
           rm -rf .git
           cd ..
+          mv custom-git workspace/Unciv-custom
 
-      - name: Assemble workspace
-        shell: bash
-        run: |
-          set -euo pipefail
-          mkdir -p workspace
-          mv CivAgent Unciv workspace/
-          mv custom-tip.txt merge-base.txt upstream-tip.txt merge-status.txt \
-             custom-changed-files.txt custom-diff-stat.txt custom-commits.txt \
-             merge-conflicts.txt merge-git-status.txt conflict-stages workspace/
+          git clone https://github.com/yairm210/Unciv.git upstream-git
+          cd upstream-git
+          git checkout edcd78c5f78d87843346635b2aad660e65333ea5
+          rm -rf .git
+          cd ..
+          mv upstream-git workspace/Unciv-upstream
 
-      - name: Upload merge workspace
+          cat > workspace/SOURCE-VERSIONS.txt <<'EOF'
+          CivAgent: asdqsczser/CivAgent release/release @ 2fcf78f022c048290de616bbf7218aadd3eb26e6
+          Custom Unciv: asdqsczser/Unciv @ 499b8cbdc36c29ef99686876bf47225670b28390
+          Official Unciv: yairm210/Unciv @ edcd78c5f78d87843346635b2aad660e65333ea5 (4.21.18)
+          EOF
+
+      - name: Upload source workspace
         uses: actions/upload-artifact@v4
         with:
-          name: unciv-agents-merge-workspace
+          name: unciv-agents-source-workspace
           path: workspace
           compression-level: 6
           retention-days: 2
