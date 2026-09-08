@@ -1,0 +1,62 @@
+name: Unciv Agents full regression test
+
+on:
+  push:
+    branches: [automation/unciv-agents-full-test]
+  workflow_dispatch:
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  full-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - name: Set up Java 21
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Download final port artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir artifact
+          gh run download 34169482028 \
+            --repo doubleillan/local-historia-readme \
+            --name unciv-agents-4.21.18 \
+            --dir artifact
+          test -f artifact/Unciv-CivAgent-4.21.18-source.zip
+          unzip -q artifact/Unciv-CivAgent-4.21.18-source.zip -d source
+
+      - name: Run complete Unciv test suite
+        working-directory: source/Unciv-CivAgent-4.21.18-source
+        shell: bash
+        run: |
+          set -euo pipefail
+          chmod +x gradlew
+          ./gradlew :tests:test --stacktrace --no-daemon
+
+      - name: Record result
+        if: success()
+        shell: bash
+        run: |
+          cat > FULL-TEST-REPORT.txt <<'EOF'
+          Unciv Agents 4.21.18 complete regression test: PASS
+          Source artifact run: 34169482028
+          Upstream Unciv: edcd78c5f78d87843346635b2aad660e65333ea5 (4.21.18)
+          Task: :tests:test
+          EOF
+
+      - name: Upload report
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: unciv-agents-4.21.18-full-test-report
+          path: FULL-TEST-REPORT.txt
+          retention-days: 7
